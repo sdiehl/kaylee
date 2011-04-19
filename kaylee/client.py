@@ -99,6 +99,14 @@ class Client:
         self.collect()
 
     def _kill(self):
+        # Garbage collect the sockets to avoid weirdness
+        self.control_socket.close()
+        self.pull_socket.close()
+        self.push_socket.close()
+
+        self.control_socket = None
+        self.pull_socket    = None
+        self.push_socket    = None
         self.logging.info('Stopped Worker')
 
         if self.threaded:
