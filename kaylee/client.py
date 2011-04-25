@@ -6,7 +6,7 @@ import types
 import logging
 import gevent
 from gevent_zeromq import zmq
-from utils import cat
+from utils import cat, RedisHashSet
 from collections import defaultdict
 
 class Client:
@@ -26,6 +26,8 @@ class Client:
         self.mapfn = None
         self.reducefn = None
         self.datasource = None
+
+        self.results = RedisHashSet()
 
         logging.basicConfig(logging=logging.DEBUG,
                             format="%(asctime)s [%(levelname)s] %(message)s")
@@ -206,13 +208,13 @@ class Client:
         key, value = data
 
         for k, v in self.mapfn(key, value):
-            results[k].append(v)
+            self.results[k] = v
 
         self.send_command('mapdone', (key, results))
 
     def call_reducefn(self, command, data):
         key, value = data
-        results = self.reducefn(key, value)
+        results = self.reducefn(key, value[0])
         self.send_command('reducedone', (key, results))
 
     def process_command(self, command, data=None):

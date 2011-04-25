@@ -1,10 +1,11 @@
+import time
 import random
 import marshal
 import cPickle as pickle
 import logging
 import gevent
 from gevent_zeromq import zmq
-from utils import cat
+from utils import cat, RedisHashSet
 from collections import defaultdict
 
 START    = 0
@@ -32,6 +33,9 @@ class Server:
                             format="%(asctime)s [%(levelname)s] %(message)s")
         logging.getLogger("").setLevel(logging.INFO)
         self.logging = logging
+
+        self.systime = time.time()
+        self.walltime = None
 
     def connect(self, push_addr    = None,
                       pull_addr    = None,
@@ -170,11 +174,16 @@ class Server:
 
             self.map_iter = iter(self.data)
             self.working_maps = {}
-            self.map_results = defaultdict(list)
+            self.map_results = RedisHashSet()
             self.state = MAP
             self.logging.info('Mapping')
 
         if self.state == MAP:
+
+            # Start logging walltime on first map
+            if not self.walltime:
+                self.walltime = time.time()
+
             try:
 
                 map_key = self.map_iter.next()
@@ -189,7 +198,7 @@ class Server:
                 self.state = REDUCE
                 self.reduce_iter = self.map_results.iteritems()
                 self.working_reduces = {}
-                self.reduce_results = {}
+                self.reduce_results = RedisHashSet()
                 self.logging.info('Reducing')
 
         if self.state == REDUCE:
@@ -212,6 +221,7 @@ class Server:
             # Destroy the collector thread
             self._kill()
 
+
     def map_done(self, data):
         # Don't use the results if they've already been counted
         key, value = data
@@ -219,7 +229,7 @@ class Server:
             return
 
         for k, v in value.iteritems():
-            self.map_results[k].extend(v)
+            self.map_results[k] = v
 
         del self.working_maps[key]
 
@@ -233,11 +243,11 @@ class Server:
         del self.working_reduces[key]
 
     def on_map_done(self, command, data):
-        self.map_done(data)
+        #self.map_done(data)
         self.start_new_task()
 
     def on_reduce_done(self, command, data):
-        self.reduce_done(data)
+        #self.reduce_done(data)
         self.start_new_task()
 
     def gen_bytecode(self):

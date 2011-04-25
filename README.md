@@ -3,7 +3,13 @@ Directions:
 
 Install ZeroMQ:
 
-    $ apt-get install zeromq-bin 
+For Ubuntu Linux
+
+    $ apt-get install zeromq-bin libzmq-dev libzmq0
+
+For Arch Linux
+
+    $ pacman -S zeromq
 
 Build your virtualenv:
 
@@ -16,7 +22,7 @@ Install neccesary packages:
     $ pip install -r requirements.txt 
 
 Example
-===========
+=======
 
 Grab a large dataset (Moby Dick):
 
