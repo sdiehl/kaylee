@@ -1,3 +1,3 @@
 gevent
 pyzmq
-gevent_zeromq
+git+https://github.com/traviscline/gevent-zeromq#egg=gevent_zeromq
