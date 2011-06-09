@@ -43,3 +43,8 @@ Or
     >>> c = Client()
     >>> c.connect()
     >>> c.start()
+
+License
+=======
+
+Released under a MIT License
