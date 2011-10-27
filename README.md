@@ -19,7 +19,7 @@ Build your virtualenv:
 
 Install neccesary packages:
 
-    $ pip install -r requirements.txt 
+    $ pip install -r requirements.txt
 
 Example
 =======
@@ -30,9 +30,9 @@ Grab a large dataset (Moby Dick):
     $ mv pg2701.txt mobydick.txt
 
 Run server:
-    
+
     $ python example.py
-    
+
 Run worker(s):
 
     $ python kaylee/client.py
