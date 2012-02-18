@@ -1,7 +1,7 @@
 Directions:
 ===========
 
-Install ZeroMQ:
+Install ZeroMQ 2.1.x:
 
 For Ubuntu Linux
 
@@ -47,4 +47,4 @@ Or
 License
 =======
 
-Released under a MIT License
+Released under a MIT License. Do with it what you please.
