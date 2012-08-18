@@ -1,15 +1,19 @@
 Directions:
 ===========
 
-Install ZeroMQ 2.1.x:
+Install ZeroMQ:
+
+For Arch Linux
+
+    $ pacman -S zeromq
 
 For Ubuntu Linux
 
     $ apt-get install zeromq-bin libzmq-dev libzmq0
 
-For Arch Linux
+For Macintosh:
 
-    $ pacman -S zeromq
+    $ brew install zeromq
 
 Build your virtualenv:
 
@@ -17,12 +21,15 @@ Build your virtualenv:
     $ virtualenv --no-site-packages env
     $ source env/bin/activative
 
-Install neccesary packages:
+Install necessary packages:
 
     $ pip install -r requirements.txt 
 
 Example
 =======
+
+Let's do the 'hello world' of Map-Reduce, taking a large corpus
+and counting the occurrences of words in parallel.
 
 Grab a large dataset (Moby Dick):
 
