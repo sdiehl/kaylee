@@ -1,18 +1,24 @@
 import random
 import marshal
-import cPickle as pickle
 import logging
 import gevent
-from gevent_zeromq import zmq
-from utils import cat
+
+import zmq.green as zmq
 from collections import defaultdict
 
-START    = 0
-MAP      = 1
-REDUCE   = 2
-FINISHED = 3
+START     = 0
+MAP       = 1
+SHUFFLE   = 2
+PARTITION = 3
+REDUCE    = 4
+COLLECT   = 5
 
-class Server:
+try:
+    import msgpack as srl
+except ImportError:
+    import cPickle as srl
+
+class Server(object):
 
     def __init__(self):
 
@@ -21,113 +27,118 @@ class Server:
 
         self.mapfn = None
         self.reducefn = None
-        self.data = None
+        self.datafn = None
+
         self.bytecode = None
 
         self.started = False
         self.completed = False
-        self.delim = '::'
+
+        self.working_maps = {}
 
         logging.basicConfig(logging=logging.DEBUG,
-                            format="%(asctime)s [%(levelname)s] %(message)s")
+            format="%(asctime)s [%(levelname)s] %(message)s")
         logging.getLogger("").setLevel(logging.INFO)
         self.logging = logging
 
-    def connect(self, push_addr    = None,
-                      pull_addr    = None,
-                      control_addr = None):
+    def main_loop(self):
+        self.started = True
 
-            c = zmq.Context()
+        poller = zmq.Poller()
 
-            # Pull tasks across manager
-            if not pull_addr:
-                prot = 'tcp://'
-                ip   = '127.0.0.1'
-                port = '6666'
-                addr = ''.join([prot,ip,':',port])
-            elif len(pull_addr) > 1:
-                prot, ip, port = pull_addr
-                addr = ''.join([prot,ip,':',port])
+        poller.register(self.pull_socket, zmq.POLLIN)
+        poller.register(self.push_socket, zmq.POLLOUT)
+        poller.register(self.ctrl_socket, zmq.POLLOUT)
+
+        while self.started and not self.completed:
+            try:
+                events = dict(poller.poll())
+            except zmq.ZMQError:
+                self._kill()
+                break
+
+            # Specify number of nodes to requeset
+            if len(self.workers) > 0:
+                if events.get(self.push_socket) == zmq.POLLOUT:
+                    self.start_new_task()
+                if events.get(self.ctrl_socket) == zmq.POLLIN:
+                    self.manage()
+                if events.get(self.pull_socket) == zmq.POLLIN:
+                    self.collect_task()
             else:
-                addr = pull_addr
+                if events.get(self.pull_socket) == zmq.POLLIN:
+                    self.collect_task()
+                if events.get(self.ctrl_socket) == zmq.POLLIN:
+                    self.manage()
 
-            print addr
+    def connect(self, push_addr = None, pull_addr = None, control_addr = None):
+        c = zmq.Context()
 
-            self.pull_socket = c.socket(zmq.PULL)
-            self.pull_socket.bind(addr)
+        # Pull tasks across manager
+        if not pull_addr:
+            prot = 'tcp://'
+            ip   = '127.0.0.1'
+            port = '6666'
+            addr = ''.join([prot,ip,':',port])
+        elif len(pull_addr) > 1:
+            prot, ip, port = pull_addr
+            addr = ''.join([prot,ip,':',port])
+        else:
+            addr = pull_addr
 
-            # Pull tasks across manager
-            if not push_addr:
-                prot = 'tcp://'
-                ip   = '127.0.0.1'
-                port = '5555'
-                addr = ''.join([prot,ip,':',port])
-            elif len(push_addr) > 1:
-                prot, ip, port = push_addr
-                addr = ''.join([prot,ip,':',port])
-            else:
-                addr = push_addr
+        print addr
 
-            print addr
+        self.pull_socket = c.socket(zmq.PULL)
+        self.pull_socket.bind(addr)
 
-            self.push_socket = c.socket(zmq.PUSH)
-            self.push_socket.bind(addr)
+        if not push_addr:
+            prot = 'tcp://'
+            ip   = '127.0.0.1'
+            port = '5555'
+            addr = ''.join([prot,ip,':',port])
+        elif len(push_addr) > 1:
+            prot, ip, port = push_addr
+            addr = ''.join([prot,ip,':',port])
+        else:
+            addr = push_addr
 
-            # Pull tasks across manager
-            if not control_addr:
-                prot = 'tcp://'
-                ip   = '127.0.0.1'
-                port = '7777'
-                addr = ''.join([prot,ip,':',port])
-            elif len(control_addr) > 1:
-                prot, ip, port = control_addr
-                addr = ''.join([prot,ip,':',port])
-            else:
-                addr = control_addr
+        print addr
 
-            print addr
+        self.push_socket = c.socket(zmq.PUSH)
+        self.push_socket.bind(addr)
 
-            self.control_socket = c.socket(zmq.PUB)
-            self.control_socket.bind(addr)
+        # Pull tasks across manager
+        if not control_addr:
+            prot = 'tcp://'
+            ip   = '127.0.0.1'
+            port = '7777'
+            addr = ''.join([prot,ip,':',port])
+        elif len(control_addr) > 1:
+            prot, ip, port = control_addr
+            addr = ''.join([prot,ip,':',port])
+        else:
+            addr = control_addr
 
+        print 'Control Socket', addr
+
+        self.ctrl_socket = c.socket(zmq.ROUTER)
+        self.ctrl_socket.bind(addr)
 
     def start(self, timeout=None):
-
-        self.started = True
+        self.gen_bytecode()
         self.logging.info('Started Server')
 
-        try:
-            if timeout:
-                timeout = gevent.Timeout(timeout, gevent.Timeout)
-
-            self.start_new_task()
-            # Block until we collect all data
-            gevent.spawn(self.collect).join(timeout=timeout)
-
-        except KeyboardInterrupt:
-            self.started = False
-            self.logging.info('Stopped Server')
-
-        except gevent.Timeout:
-            self.started = False
-            self.logging.info('Timed out')
+        main = gevent.spawn(self.main_loop)
+        main.join()
 
         self.done()
 
     def done(self):
         for worker in self.workers:
-            self.send_control('done',None,worker)
+            self.ctrl_socket.send_multipart([worker, 'done'])
 
     def _kill(self):
         gevent.getcurrent().kill()
-
-    def collect(self):
-        while True:
-            msg = self.pull_socket.recv()
-
-            if msg:
-                command, data = msg.split(self.delim)
-                self.process_command(command, data)
 
     def results(self):
         if self.completed:
@@ -135,110 +146,123 @@ class Server:
         else:
             return None
 
-    #@print_timing
-    def send_control(self, command, data, worker):
-        _d = self.delim
-        self.logging.debug('Sending to: %s' % worker)
-        if data:
-            pdata = pickle.dumps(data)
-            #logging.debug( "<- %s" % command)
-            self.control_socket.send(cat(worker,_d,command,_d,pdata))
-        else:
-            #logging.debug( "<- %s" % command)
-            self.control_socket.send(cat(worker,_d,command ,_d))
+    def send_datum(self, command, key, data):
+        self.push_socket.send(command, flags=zmq.SNDMORE)
+        self.push_socket.send(str(key), flags=zmq.SNDMORE)
+        # Do a multipart message since we want to do
+        # zero-copy of data.
 
-    #@print_timing
-    def send_command(self, command, data=None):
-        _d = self.delim
-        if data:
-            pdata = pickle.dumps(data)
-            #logging.debug( "<- %s" % command)
-            self.push_socket.send(cat(command,_d, pdata))
+        if self.state == MAP:
+            self.push_socket.send(data, copy=False)
         else:
-            #logging.debug( "<- %s" % command)
-            self.push_socket.send(cat(command ,_d))
+            self.push_socket.send(srl.dumps(data))
+
+    def send_command(self, command, payload=None):
+        if payload:
+            self.send_datum(command, *payload)
+        else:
+            self.push_socket.send(command)
 
     def start_new_task(self):
-        command, data = self.next_task()
-        if command:
+        action = self.next_task()
+        if action:
+            command, data = action
             self.send_command(command, data)
-            #gevent.spawn(self.send_command, command, data)
 
     def next_task(self):
 
         if self.state == START:
 
-            self.map_iter = iter(self.data)
-            self.working_maps = {}
+            #self.job_id = 'foo'
+            self.map_iter = self.datafn()
             self.map_results = defaultdict(list)
             self.state = MAP
             self.logging.info('Mapping')
 
         if self.state == MAP:
+
             try:
-
-                map_key = self.map_iter.next()
-                map_item = map_key, self.data[map_key]
-                self.working_maps[map_item[0]] = map_item[1]
-                return 'map', map_item
-
+                map_key, map_item = self.map_iter.next()
+                self.working_maps[str(map_key)] = map_item
+                #print 'sending', map_key
+                return 'map', (map_key, map_item)
             except StopIteration:
-                if len(self.working_maps) > 0:
-                    key = random.choice(self.working_maps.keys())
-                    return 'map', (key, self.working_maps[key])
-                self.state = REDUCE
-                self.reduce_iter = self.map_results.iteritems()
-                self.working_reduces = {}
-                self.reduce_results = {}
+                self.logging.info('Shuffling')
+                self.state = SHUFFLE
+
+        if self.state == SHUFFLE:
+            self.reduce_iter = self.map_results.iteritems()
+            self.working_reduces = set()
+            self.reduce_results = {}
+
+            if len(self.working_maps) == 0:
                 self.logging.info('Reducing')
+                self.state = PARTITION
+            #else:
+                #self.logging.info('Still shuffling %s ' % len(self.working_maps))
+
+        if self.state == PARTITION:
+            self.state = REDUCE
 
         if self.state == REDUCE:
+
             try:
-
-                reduce_item = self.reduce_iter.next()
-                self.working_reduces[reduce_item[0]] = reduce_item[1]
-                return 'reduce', reduce_item
-
+                reduce_key, reduce_value = self.reduce_iter.next()
+                self.working_reduces.add(reduce_key)
+                return 'reduce', (reduce_key, reduce_value)
             except StopIteration:
+                self.logging.info('Collecting')
+                self.state = COLLECT
 
-                if len(self.working_reduces) > 0:
-                    key = random.choice(self.working_reduces.keys())
-                    return 'reduce', (key, self.working_reduces[key])
+        if self.state == COLLECT:
 
-                self.state = FINISHED
+            if len(self.working_reduces) == 0:
+                self.completed = True
+                self.logging.info('Finished')
+            #else:
+                #self.logging.info('Still collecting %s' % len(self.working_reduces))
 
-        if self.state == FINISHED:
-            self.completed = True
-            # Destroy the collector thread
-            self._kill()
-
-    def map_done(self, data):
+    def collect_task(self):
         # Don't use the results if they've already been counted
-        key, value = data
-        if key not in self.working_maps:
-            return
+        command = self.pull_socket.recv(flags=zmq.SNDMORE)
 
-        for k, v in value.iteritems():
-            self.map_results[k].extend(v)
+        if command == 'connect':
+            payload = self.pull_socket.recv()
+            self.on_connect(payload)
 
-        del self.working_maps[key]
+        elif command == 'keydone':
+            key = self.pull_socket.recv()
+            del self.working_maps[key]
 
-    def reduce_done(self, data):
-        # Don't use the results if they've already been counted
-        key, value = data
-        if key not in self.working_reduces:
-            return
+        elif command == 'mapdone':
+            key = self.pull_socket.recv(flags=zmq.SNDMORE)
+            tkey = self.pull_socket.recv(flags=zmq.SNDMORE)
+            value = self.pull_socket.recv()
 
-        self.reduce_results[key] = value
-        del self.working_reduces[key]
+            #print tkey, key, value
+            self.map_results[tkey].extend(value)
+
+            #del self.working_maps[key]
+
+        elif command == 'reducedone':
+            key = self.pull_socket.recv(flags=zmq.SNDMORE)
+            value = srl.loads(self.pull_socket.recv())
+
+            # Don't use the results if they've already been counted
+            if key not in self.working_reduces:
+                return
+
+            self.reduce_results[key] = value
+            self.working_reduces.remove(key)
+
+        else:
+            raise RuntimeError()
 
     def on_map_done(self, command, data):
         self.map_done(data)
-        self.start_new_task()
 
     def on_reduce_done(self, command, data):
         self.reduce_done(data)
-        self.start_new_task()
 
     def gen_bytecode(self):
         self.bytecode = (
@@ -246,34 +270,31 @@ class Server:
             marshal.dumps(self.reducefn.func_code),
         )
 
-    def on_connect(self, command, data):
-        self.logging.info('Worker Registered: %s' % data)
-        self.workers.add(data)
-        worker_id = data
+    def on_connect(self, worker_id):
+        if worker_id not in self.workers:
+            self.logging.info('Worker Registered: %s' % worker_id)
+            self.workers.add(worker_id)
 
-        # Store this so we don't call it for every worker
-        if not self.bytecode:
-            self.gen_bytecode()
-
-        self.send_control(
-            'bytecode',
-            self.bytecode,
-            worker_id
-        )
-
-        self.logging.info('Sending Bytecode')
-        self.start_new_task()
+            payload = ('bytecode', self.bytecode)
+            self.ctrl_socket.send_multipart([worker_id, srl.dumps(payload)])
+            self.logging.info('Sending Bytecode')
+        else:
+            print worker_id
 
     def process_command(self, command, data=None):
-        commands = {
-            'mapdone': self.on_map_done,
-            'reducedone': self.on_reduce_done,
-            'connect': self.on_connect
-        }
+        self.commands[command](self, command, data)
 
-        if command in commands:
-            if data:
-                data = pickle.loads(data)
-            commands[command](command, data)
-        else:
-            self.process_command(self, command, data)
+    commands = {
+        'mapdone'    : on_map_done,
+        'reducedone' : on_reduce_done,
+        'connect'    : on_connect
+    }
+
+if __name__ == '__main__':
+
+    # Support Cython!
+    import sys
+    import imp
+
+    path = sys.argv[1]
+    imp.load_module(path)

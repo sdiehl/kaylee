@@ -1,25 +1,29 @@
 import sys
 import uuid
-import cPickle as pickle
+import numpy
 import marshal
 import types
 import logging
+
 import gevent
-from gevent_zeromq import zmq
-from utils import cat
+import zmq.green as zmq
+
+try:
+    import msgpack as srl
+except ImportError:
+    import cPickle as srl
+
 from collections import defaultdict
 
-class Client:
+class Client(object):
 
     def __init__(self):
 
         self.worker_id = str(uuid.uuid4())
         self.push_socket = None
         self.pull_socket = None
-        self.control_socket = None
-        self.delim = '::'
+        self.ctrl_socket = None
 
-        # only listen for instructions for this specific worker
         self.threaded = False
         self.have_bytecode = False
 
@@ -86,12 +90,9 @@ class Client:
 
             print addr
 
-            self.control_socket = c.socket(zmq.SUB)
-            self.control_socket.connect(addr)
-            self.control_socket.setsockopt(zmq.SUBSCRIBE, self.worker_id)
-
-    def spawn(self):
-        self.threaded = True
+            self.ctrl_socket = c.socket(zmq.ROUTER)
+            self.ctrl_socket.setsockopt(zmq.IDENTITY, self.worker_id)
+            self.ctrl_socket.connect(addr)
 
     def start(self):
         ''' Start processing work '''
@@ -99,98 +100,87 @@ class Client:
         self.collect()
 
     def _kill(self):
-        # Garbage collect the sockets to avoid weirdness
-        self.control_socket.close()
+        self.ctrl_socket.close()
         self.pull_socket.close()
         self.push_socket.close()
 
-        self.control_socket = None
-        self.pull_socket    = None
-        self.push_socket    = None
+        self.ctrl_socket = None
+        self.pull_socket = None
+        self.push_socket = None
         self.logging.info('Stopped Worker')
 
-        if self.threaded:
-            gevent.getcurrent().kill()
-        else:
-            sys.exit(1)
+        sys.exit(0)
 
     def collect(self):
-        self.register()
         poller = zmq.Poller()
         poller.register(self.pull_socket, zmq.POLLIN)
-        poller.register(self.control_socket, zmq.POLLIN)
+        poller.register(self.ctrl_socket, zmq.POLLIN)
 
         # multiplex the pull and control ports
         pull_socket = self.pull_socket
-        control_socket = self.control_socket
+        ctrl_socket = self.ctrl_socket
 
         while True:
-            # Wait until the server pushes bytecode to use to
-            # listening for data, ( this is a race condition
-            # otherwise )
+
             if self.have_bytecode:
+
                 try:
-                    socks = dict(poller.poll())
+                    events = dict(poller.poll())
                 except zmq.ZMQError:
                     # Die gracefully if the user sends a SIGQUIT
                     self._kill()
                     break
 
-                if pull_socket in socks and socks[pull_socket] == zmq.POLLIN:
-                    msg = self.pull_socket.recv()
+                if events.get(pull_socket) == zmq.POLLIN:
 
-                    if msg:
-                        command, data = msg.split(self.delim)
-                        self.process_command(command, data)
+                    command = self.pull_socket.recv(flags=zmq.SNDMORE)
+                    key = self.pull_socket.recv(flags=zmq.SNDMORE)
+                    data = self.pull_socket.recv(copy=False)
+                    payload = (key, data)
 
-                if control_socket in socks and socks[control_socket] == zmq.POLLIN:
-                    msg = self.control_socket.recv()
+                    self.process_command(command, payload)
 
-                    if msg:
-                        worker, command, data = msg.split(self.delim)
-                        self.process_command(command, data)
-            else:
-                msg = self.control_socket.recv()
-
-                if msg:
-                    worker, command, data = msg.split(self.delim)
+                if events.get(ctrl_socket) == zmq.POLLIN:
+                    worker_id, command = self.ctrl_socket.recv_multipart()
                     self.process_command(command, data)
 
-    def register(self):
-        '''
-        Register the node with the server.
-        '''
-        self.send_command('connect', self.worker_id)
+            else:
+                self.logging.info('Waiting for server')
+
+                msg = srl.dumps(('connect', self.worker_id))
+                self.push_socket.send_multipart(['connect', self.worker_id])
+
+                worker_id, payload = self.ctrl_socket.recv_multipart()
+                command, (mapbc, reducebc) = srl.loads(payload)
+
+                assert command == 'bytecode'
+                self.set_bytecode(mapbc, reducebc)
+                self.logging.info('Received Bytecode')
 
     def send_command(self, command, data=None):
         '''
-        Push a command to the sever.
+        Push a command to the server.
         '''
-        _d = self.delim
-
         if data:
-            pdata = pickle.dumps(data)
-            self.push_socket.send(cat(command,_d,pdata))
-            #logging.debug(command)
+            msg = srl.dumps((command, data))
+            self.push_socket.send(msg)
         else:
-            self.push_socket.send(cat(command,_d))
-            #logging.debug(command)
+            msg = command
+            self.push_socket.send(msg)
 
-    def set_bytecode(self, command, data):
+    def set_bytecode(self, mapbc, reducebc):
         '''
         Load the bytecode sent by the server and flag that we are
         ready for work.
         '''
-        #self.logging.info('Received Bytecode')
-        mapfn_bc, reducefn_bc = data
 
         self.mapfn = types.FunctionType(
-            marshal.loads(mapfn_bc),
+            marshal.loads(mapbc),
             globals(),
             'mapfn'
         )
         self.reducefn = types.FunctionType(
-            marshal.loads(reducefn_bc),
+            marshal.loads(reducebc),
             globals(),
             'reducefn'
         )
@@ -198,35 +188,60 @@ class Client:
         self.have_bytecode = True
 
     def on_done(self, command=None, data=None):
-        #self.logging.info('Done')
         self._kill()
 
     def call_mapfn(self, command, data):
-        results = defaultdict(list)
+        #results = defaultdict(list)
         key, value = data
 
         for k, v in self.mapfn(key, value):
-            results[k].append(v)
+            print 'mapping', k, v
+            # Probably don't actually want to do this, but
+            # instead collect up a temporray batch and then do a
+            # tight loop where we send everything.
 
-        self.send_command('mapdone', (key, results))
+            self.push_socket.send('mapdone', flags=zmq.SNDMORE)
+            self.push_socket.send(key, flags=zmq.SNDMORE)
+            self.push_socket.send(k, flags=zmq.SNDMORE)
+            self.push_socket.send(srl.dumps(v))
+            #results[k].append(v)
+
+        self.push_socket.send('keydone', flags=zmq.SNDMORE)
+        self.push_socket.send(key)
+
+        #print 'mapping', key
+        #import pdb; pdb.set_trace()
+
+        #if isinstance(results, numpy.ndarray):
+            #self.push_socket.send(results, copy=False)
+        #else:
+            #self.push_socket.send(srl.dumps(results))
 
     def call_reducefn(self, command, data):
         key, value = data
-        results = self.reducefn(key, value)
-        self.send_command('reducedone', (key, results))
 
-    def process_command(self, command, data=None):
-        commands = {
-            'bytecode': self.set_bytecode,
-            'done': self.on_done,
-            'map': self.call_mapfn,
-            'reduce': self.call_reducefn,
-        }
+        from itertools import imap
+        it = imap(srl.loads, srl.loads(value))
 
-        if command in commands:
-            if data:
-                data = pickle.loads(data)
-            commands[command](command, data)
+        results = self.reducefn(key, it)
+
+        print 'reducing', key
+        self.push_socket.send('reducedone', flags=zmq.SNDMORE)
+        self.push_socket.send(key, flags=zmq.SNDMORE)
+
+        if isinstance(results, numpy.ndarray):
+            self.push_socket.send(results, copy=False)
+        else:
+            self.push_socket.send(srl.dumps(results))
+
+    def process_command(self, command, payload=None):
+        self.commands[command](self, command, payload)
+
+    commands = {
+        'done'     : on_done,
+        'map'      : call_mapfn,
+        'reduce'   : call_reducefn,
+    }
 
 if __name__ == "__main__":
     c = Client()

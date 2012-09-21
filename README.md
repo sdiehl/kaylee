@@ -1,3 +1,19 @@
+Motivation
+==========
+
+Kaylee is a small MapReduce implementation mostly meant as a
+proof of concept to illustrate the power of ZeroMQ and for
+education purpose
+
+My goal was not to write a Hadoop clone but to build a starting point
+that one could use to learn about MapReduce.
+
+The main bottleneck in this implementation is that the Shuffle
+phase requires all data to be moved to the ``server`` instance
+which is not generally a good idea for performance. But this lets
+us a implement a simple shuffler using a Python defaultdict in
+just a few lines of code which is easy to understand.
+
 Directions:
 ===========
 
@@ -9,6 +25,8 @@ For Arch Linux
 
 For Ubuntu Linux
 
+    $ add-apt-repository ppa:chris-lea/zeromq
+    $ apt-get update
     $ apt-get install zeromq-bin libzmq-dev libzmq0
 
 For Macintosh:
