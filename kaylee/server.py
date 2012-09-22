@@ -2,6 +2,7 @@ import random
 import marshal
 import logging
 import gevent
+from StringIO import StringIO
 
 import zmq.green as zmq
 from collections import defaultdict
@@ -22,6 +23,20 @@ COLLECT   = 5
 MEMORY   = 0
 REDIS    = 1
 KAYLEEFS = 2
+
+# Server instructions
+# -------------------
+#MAP      = 'map'
+#REDUCE   = 'reduce'
+#DONE     = 'done'
+#BYTECODE = 'bytecode'
+
+# Client instructions
+# -------------------
+CONNECT     = 'connect'
+MAPATOM     = 'mapdone'
+MAPCHUNK    = 'mapkeydone'
+REDUCEATOM  = 'reducedone'
 
 try:
     import msgpack as srl
@@ -168,11 +183,9 @@ class Server(object):
             self.logging.info('Mapping')
 
         if self.state == MAP:
-
             try:
-                map_key, map_item = self.map_iter.next()
+                map_key, map_item = next(self.map_iter)
                 self.working_maps[str(map_key)] = map_item
-                #print 'sending', map_key
                 return 'map', (map_key, map_item)
             except StopIteration:
                 self.logging.info('Shuffling')
@@ -187,15 +200,14 @@ class Server(object):
                 self.logging.info('Reducing')
                 self.state = PARTITION
             else:
-                self.logging.info('Still shuffling %s ' % len(self.working_maps))
+                self.logging.debug('Still shuffling %s ' % len(self.working_maps))
 
         if self.state == PARTITION:
             self.state = REDUCE
 
         if self.state == REDUCE:
-
             try:
-                reduce_key, reduce_value = self.reduce_iter.next()
+                reduce_key, reduce_value = next(self.reduce_iter)
                 self.working_reduces.add(reduce_key)
                 return 'reduce', (reduce_key, reduce_value)
             except StopIteration:
@@ -203,12 +215,11 @@ class Server(object):
                 self.state = COLLECT
 
         if self.state == COLLECT:
-
             if len(self.working_reduces) == 0:
                 self.completed = True
                 self.logging.info('Finished')
             else:
-                self.logging.info('Still collecting %s' % len(self.working_reduces))
+                self.logging.debug('Still collecting %s' % len(self.working_reduces))
 
     def collect_task(self):
         # Don't use the results if they've already been counted
@@ -261,6 +272,15 @@ class Server(object):
             marshal.dumps(self.reducefn.func_code),
         )
 
+    def gen_llvm(self, mapfn, reducefn):
+        mapbc = StringIO()
+        reducebc = StringIO()
+
+        mapfn.mod.to_bitcode(mapbc)
+        mapfn.mod.to_bitcode(reducebc)
+
+        return (mapbc, reducebc)
+
     def on_connect(self, worker_id):
         if worker_id not in self.workers:
             self.logging.info('Worker Registered: %s' % worker_id)
@@ -271,15 +291,6 @@ class Server(object):
             self.logging.info('Sending Bytecode')
         else:
             print worker_id
-
-    def process_command(self, command, data=None):
-        self.commands[command](self, command, data)
-
-    commands = {
-        'mapdone'    : on_map_done,
-        'reducedone' : on_reduce_done,
-        'connect'    : on_connect
-    }
 
 if __name__ == '__main__':
     # Job submission

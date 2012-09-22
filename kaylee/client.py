@@ -16,12 +16,14 @@ except ImportError:
     import cPickle as srl
 
 # Server instructions
+# -------------------
 MAP      = 'map'
 REDUCE   = 'reduce'
 DONE     = 'done'
 BYTECODE = 'bytecode'
 
 # Client instructions
+# -------------------
 CONNECT     = 'connect'
 MAPATOM     = 'mapdone'
 REDUCEATOM  = 'reducedone'
