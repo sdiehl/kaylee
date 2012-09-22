@@ -22,9 +22,10 @@ def datafn():
         yield next(i), memoryview(mm.readline())
     mm.close()
 
-# MapReduce can be thought of on a high level as being a
-# list homomorphism being parallelizable because of the
-# associativity of the of map and reduce operations.
+# MapReduce can be thought of on a high level as being a list
+# homomorphism that can be written as a composition of two functions (
+# Reduce . Map ) . It is parallelizable because of the associativity of
+# the of map and reduce operations.
 #
 #   MapReduce :: [(k1, v1)] -> [(k3, v3)]
 #   MapReduce = Reduce .  Map
@@ -32,9 +33,8 @@ def datafn():
 #   MapReduce :: a -> [(k3, v3)]
 #   MapReduce = reducefn . shuffle . mapfn . datafn
 
-# The implementation providese two functions
+# The implementation provides two functions
 # split ( datafn ) and shuffle.
-
 
 # map :: (k1,v1) -> [ (k2, v2) ]
 def mapfn(k1, v):
@@ -56,15 +56,6 @@ s.connect()
 
 # yaml config
 # Datastore backend, Redis kaylee://
-
-# kaylee
-#    /key1
-#        blob
-#        blob
-#    /key2
-#        blob
-#        blob
-#    /key3
 
 s.mapfn    = mapfn
 s.reducefn = reducefn

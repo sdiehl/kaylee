@@ -1,6 +1,8 @@
 import time
 import msgpack
 
+transports = frozenset(['udp', 'tcp', 'ipc', 'inproc'])
+
 def cat(*xs):
     return "".join(xs)
 
@@ -16,6 +18,22 @@ def print_timing(func):
 def sub_subscription_prefix(worker_id, n=3):
     """
     Listen for n-tuples with the worker id prefix without
-    deserialization. Very fast.
+    deserialization. Very fast for PUB/SUB.
     """
     return msgpack.dumps(tuple([worker_id] + [None]*(n-1)))[0:2]
+
+def zmq_addr(port, transport=None, host=None):
+    if host is None:
+        host = '127.0.0.1'
+
+    if transport is None:
+        transport = 'tcp'
+
+    assert transport in transports
+    assert 1000 < port < 10000
+
+    return '{transport}://{host}:{port}'.format(
+        transport = transport,
+        host      = host,
+        port      = port,
+    )

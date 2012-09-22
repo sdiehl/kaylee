@@ -5,13 +5,23 @@ import gevent
 
 import zmq.green as zmq
 from collections import defaultdict
+from utils import zmq_addr
+from backends import RedisShuffler
 
+# States
+# ------
 START     = 0
 MAP       = 1
 SHUFFLE   = 2
 PARTITION = 3
 REDUCE    = 4
 COLLECT   = 5
+
+# Shufle Backends
+# ---------------
+MEMORY   = 0
+REDIS    = 1
+KAYLEEFS = 2
 
 try:
     import msgpack as srl
@@ -20,10 +30,12 @@ except ImportError:
 
 class Server(object):
 
-    def __init__(self):
+    def __init__(self, backend=MEMORY):
 
         self.workers = set()
         self.state = START
+
+        self.backend = backend
 
         self.mapfn = None
         self.reducefn = None
@@ -36,8 +48,7 @@ class Server(object):
 
         self.working_maps = {}
 
-        logging.basicConfig(logging=logging.DEBUG,
-            format="%(asctime)s [%(levelname)s] %(message)s")
+        logging.basicConfig(logging=logging.DEBUG)
         logging.getLogger("").setLevel(logging.INFO)
         self.logging = logging
 
@@ -46,14 +57,19 @@ class Server(object):
 
         poller = zmq.Poller()
 
-        poller.register(self.pull_socket, zmq.POLLIN)
-        poller.register(self.push_socket, zmq.POLLOUT)
-        poller.register(self.ctrl_socket, zmq.POLLOUT)
+        poller.register(self.pull_socket, zmq.POLLIN  | zmq.POLLERR)
+        poller.register(self.push_socket, zmq.POLLOUT | zmq.POLLERR)
+        poller.register(self.ctrl_socket, zmq.POLLOUT | zmq.POLLERR)
 
         while self.started and not self.completed:
             try:
                 events = dict(poller.poll())
             except zmq.ZMQError:
+                self._kill()
+                break
+
+            if any(ev & zmq.POLLERR for ev in events.itervalues()):
+                self.logging.error('Socket error.')
                 self._kill()
                 break
 
@@ -71,58 +87,25 @@ class Server(object):
                 if events.get(self.ctrl_socket) == zmq.POLLIN:
                     self.manage()
 
+
     def connect(self, push_addr = None, pull_addr = None, control_addr = None):
         c = zmq.Context()
 
         # Pull tasks across manager
-        if not pull_addr:
-            prot = 'tcp://'
-            ip   = '127.0.0.1'
-            port = '6666'
-            addr = ''.join([prot,ip,':',port])
-        elif len(pull_addr) > 1:
-            prot, ip, port = pull_addr
-            addr = ''.join([prot,ip,':',port])
-        else:
-            addr = pull_addr
-
-        print addr
+        pull_addr = zmq_addr(6666, transport='tcp')
 
         self.pull_socket = c.socket(zmq.PULL)
-        self.pull_socket.bind(addr)
+        self.pull_socket.bind(pull_addr)
 
-        if not push_addr:
-            prot = 'tcp://'
-            ip   = '127.0.0.1'
-            port = '5555'
-            addr = ''.join([prot,ip,':',port])
-        elif len(push_addr) > 1:
-            prot, ip, port = push_addr
-            addr = ''.join([prot,ip,':',port])
-        else:
-            addr = push_addr
-
-        print addr
+        push_addr = zmq_addr(5555, transport='tcp')
 
         self.push_socket = c.socket(zmq.PUSH)
-        self.push_socket.bind(addr)
+        self.push_socket.bind(push_addr)
 
-        # Pull tasks across manager
-        if not control_addr:
-            prot = 'tcp://'
-            ip   = '127.0.0.1'
-            port = '7777'
-            addr = ''.join([prot,ip,':',port])
-        elif len(control_addr) > 1:
-            prot, ip, port = control_addr
-            addr = ''.join([prot,ip,':',port])
-        else:
-            addr = control_addr
-
-        print 'Control Socket', addr
+        ctrl_addr = zmq_addr(7777, transport='tcp')
 
         self.ctrl_socket = c.socket(zmq.ROUTER)
-        self.ctrl_socket.bind(addr)
+        self.ctrl_socket.bind(ctrl_addr)
 
     def start(self, timeout=None):
         self.gen_bytecode()
@@ -131,6 +114,7 @@ class Server(object):
         main = gevent.spawn(self.main_loop)
         main.join()
 
+        # Clean exit
         self.done()
 
     def done(self):
@@ -138,7 +122,8 @@ class Server(object):
             self.ctrl_socket.send_multipart([worker, 'done'])
 
     def _kill(self):
-        gevent.getcurrent().kill()
+        gr = gevent.getcurrent()
+        gr.kill()
 
     def results(self):
         if self.completed:
@@ -149,8 +134,6 @@ class Server(object):
     def send_datum(self, command, key, data):
         self.push_socket.send(command, flags=zmq.SNDMORE)
         self.push_socket.send(str(key), flags=zmq.SNDMORE)
-        # Do a multipart message since we want to do
-        # zero-copy of data.
 
         if self.state == MAP:
             self.push_socket.send(data, copy=False)
@@ -172,10 +155,15 @@ class Server(object):
     def next_task(self):
 
         if self.state == START:
-
-            #self.job_id = 'foo'
             self.map_iter = self.datafn()
-            self.map_results = defaultdict(list)
+
+            if self.backend is MEMORY:
+                self.map_results = defaultdict(list)
+            elif self.backend is REDIS:
+                self.map_results = RedisShuffler()
+            elif self.backend is KAYLEEFS:
+                raise NotImplementedError()
+
             self.state = MAP
             self.logging.info('Mapping')
 
@@ -198,8 +186,8 @@ class Server(object):
             if len(self.working_maps) == 0:
                 self.logging.info('Reducing')
                 self.state = PARTITION
-            #else:
-                #self.logging.info('Still shuffling %s ' % len(self.working_maps))
+            else:
+                self.logging.info('Still shuffling %s ' % len(self.working_maps))
 
         if self.state == PARTITION:
             self.state = REDUCE
@@ -219,8 +207,8 @@ class Server(object):
             if len(self.working_reduces) == 0:
                 self.completed = True
                 self.logging.info('Finished')
-            #else:
-                #self.logging.info('Still collecting %s' % len(self.working_reduces))
+            else:
+                self.logging.info('Still collecting %s' % len(self.working_reduces))
 
     def collect_task(self):
         # Don't use the results if they've already been counted
@@ -229,6 +217,9 @@ class Server(object):
         if command == 'connect':
             payload = self.pull_socket.recv()
             self.on_connect(payload)
+
+        # Maps Units
+        # ==========
 
         elif command == 'mapkeydone':
             key = self.pull_socket.recv()
@@ -239,10 +230,10 @@ class Server(object):
             tkey = self.pull_socket.recv(flags=zmq.SNDMORE)
             value = self.pull_socket.recv()
 
-            #print tkey, key, value
             self.map_results[tkey].extend(value)
 
-            #del self.working_maps[key]
+        # Reduce Units
+        # ============
 
         elif command == 'reducedone':
             key = self.pull_socket.recv(flags=zmq.SNDMORE)
