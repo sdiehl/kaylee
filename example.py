@@ -6,7 +6,7 @@ from itertools import count
 from kaylee import Server
 
 # Note, we never load the whole file into memory.
-f = open('small.txt')
+f = open('mobydick.txt')
 mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
 
 # This just enumerates all lines in the file, but is able to

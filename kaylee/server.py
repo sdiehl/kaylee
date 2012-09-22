@@ -84,7 +84,7 @@ class Server(object):
                 break
 
             if any(ev & zmq.POLLERR for ev in events.itervalues()):
-                self.logging.error('Socket error.')
+                self.logging.error('Socket error')
                 self._kill()
                 break
 
@@ -103,7 +103,7 @@ class Server(object):
                     self.manage()
 
 
-    def connect(self, push_addr = None, pull_addr = None, control_addr = None):
+    def connect(self, push_addr=None, pull_addr=None, control_addr=None):
         c = zmq.Context()
 
         # Pull tasks across manager
@@ -226,8 +226,8 @@ class Server(object):
         command = self.pull_socket.recv(flags=zmq.SNDMORE)
 
         if command == 'connect':
-            payload = self.pull_socket.recv()
-            self.on_connect(payload)
+            worker_id = self.pull_socket.recv()
+            self.send_code(worker_id)
 
         # Maps Units
         # ==========
@@ -281,7 +281,8 @@ class Server(object):
 
         return (mapbc, reducebc)
 
-    def on_connect(self, worker_id):
+    def send_code(self, worker_id):
+        # A new worker
         if worker_id not in self.workers:
             self.logging.info('Worker Registered: %s' % worker_id)
             self.workers.add(worker_id)
@@ -290,14 +291,24 @@ class Server(object):
             self.ctrl_socket.send_multipart([worker_id, srl.dumps(payload)])
             self.logging.info('Sending Bytecode')
         else:
-            print worker_id
+            self.logging.debug('Worker asking for code again?')
 
 if __name__ == '__main__':
-    # Job submission
-
-    # Support Cython!
+    # TODO: Support Cython modules
     import sys
     import imp
+    import argparse
 
     path = sys.argv[1]
     imp.load_module(path)
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--verbose', help='Verbose logging')
+    parser.add_argument('--config',  help='Configuration')
+    parser.add_argument('--backend', help='Storage backend')
+
+    args = parser.parse_args()
+
+    srv = Server(backend=args['baackend'])
+    srv.connect()
