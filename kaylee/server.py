@@ -230,7 +230,7 @@ class Server(object):
             payload = self.pull_socket.recv()
             self.on_connect(payload)
 
-        elif command == 'keydone':
+        elif command == 'mapkeydone':
             key = self.pull_socket.recv()
             del self.working_maps[key]
 
@@ -291,6 +291,7 @@ class Server(object):
     }
 
 if __name__ == '__main__':
+    # Job submission
 
     # Support Cython!
     import sys

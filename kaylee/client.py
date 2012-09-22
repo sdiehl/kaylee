@@ -200,13 +200,16 @@ class Client(object):
             # instead collect up a temporray batch and then do a
             # tight loop where we send everything.
 
+            # specify the granulariy of chunks to flush to the
+            # server.
+
             self.push_socket.send('mapdone', flags=zmq.SNDMORE)
             self.push_socket.send(key, flags=zmq.SNDMORE)
             self.push_socket.send(k, flags=zmq.SNDMORE)
             self.push_socket.send(srl.dumps(v))
             #results[k].append(v)
 
-        self.push_socket.send('keydone', flags=zmq.SNDMORE)
+        self.push_socket.send('mapkeydone', flags=zmq.SNDMORE)
         self.push_socket.send(key)
 
         #print 'mapping', key
