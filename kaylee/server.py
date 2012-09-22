@@ -46,7 +46,6 @@ except ImportError:
 class Server(object):
 
     def __init__(self, backend=MEMORY):
-
         self.workers = set()
         self.state = START
 
@@ -66,6 +65,12 @@ class Server(object):
         logging.basicConfig(logging=logging.DEBUG)
         logging.getLogger("").setLevel(logging.INFO)
         self.logging = logging
+
+    def heartbeat_loop(self):
+        for worker in self.workers:
+            self.ctrl_socket.send_multipart([worker, 'heartbeat'])
+        print 'ping'
+        gevent.sleep(1)
 
     def main_loop(self):
         self.started = True
@@ -89,7 +94,7 @@ class Server(object):
                 break
 
             # TODO: Specify number of nodes
-            if len(self.workers) > 0:
+            if len(self.workers) > 5:
                 if events.get(self.push_socket) == zmq.POLLOUT:
                     self.start_new_task()
                 if events.get(self.ctrl_socket) == zmq.POLLIN:
@@ -126,8 +131,12 @@ class Server(object):
         self.gen_bytecode()
         self.logging.info('Started Server')
 
-        main = gevent.spawn(self.main_loop)
-        main.join()
+        main      = gevent.spawn(self.main_loop)
+        heartbeat = gevent.spawn(self.heartbeat_loop)
+        gevent.joinall([
+            main,
+            heartbeat,
+        ])
 
         # Clean exit
         self.done()
@@ -135,6 +144,14 @@ class Server(object):
     def done(self):
         for worker in self.workers:
             self.ctrl_socket.send_multipart([worker, 'done'])
+
+    def manage(self):
+        """
+        Manage hearbeats on workers. Keep track of clients that
+        are alive.
+        """
+        msg = self.ctrl_socket.recv_multipart()
+        import pdb; pdb.set_trace()
 
     def _kill(self):
         gr = gevent.getcurrent()

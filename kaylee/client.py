@@ -17,10 +17,11 @@ except ImportError:
 
 # Server instructions
 # -------------------
-MAP      = 'map'
-REDUCE   = 'reduce'
-DONE     = 'done'
-BYTECODE = 'bytecode'
+MAP       = 'map'
+REDUCE    = 'reduce'
+DONE      = 'done'
+BYTECODE  = 'bytecode'
+HEARTBEAT = 'heartbeat'
 
 # Client instructions
 # -------------------
@@ -120,6 +121,9 @@ class Client(object):
 
                 if events.get(ctrl_socket) == zmq.POLLIN:
                     worker_id, command = self.ctrl_socket.recv_multipart()
+                    if command == HEARTBEAT:
+                        self.ctrl_socket.send('alive')
+                        print 'pong'
                     if command == DONE:
                         self.kill()
                         break
