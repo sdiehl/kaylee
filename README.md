@@ -8,11 +8,11 @@ education purpose
 My goal was not to write a Hadoop clone but to build a starting point
 that one could use to learn about MapReduce.
 
-The main bottleneck in this implementation is that the Shuffle
-phase requires all data to be moved to the ``server`` instance
-which is not generally a good idea for performance. But this lets
-us a implement a simple shuffler using a Python defaultdict in
-just a few lines of code which is easy to understand.
+The main bottleneck in this implementation is that the Shuffle phase
+requires all data to be moved back to the ``Server`` instance which is
+not generally a good idea for performance. But this lets us a implement
+a simple shuffler using a Python defaultdict in just a few lines of code
+which is easy to understand.
 
 Directions:
 ===========
