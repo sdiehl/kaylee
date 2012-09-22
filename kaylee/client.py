@@ -26,10 +26,15 @@ BYTECODE = 'bytecode'
 # -------------------
 CONNECT     = 'connect'
 MAPATOM     = 'mapdone'
-REDUCEATOM  = 'reducedone'
 MAPCHUNK    = 'mapkeydone'
+REDUCEATOM  = 'reducedone'
 
 class Client(object):
+    """
+    The MapReduce worker is a stateless worker, it receives a
+    value over ZMQ, calls the map/reduce function and yields it
+    back to the socket as quickly as possible.
+    """
 
     def __init__(self):
         self.worker_id = str(uuid.uuid4())

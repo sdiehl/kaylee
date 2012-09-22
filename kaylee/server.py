@@ -88,7 +88,7 @@ class Server(object):
                 self._kill()
                 break
 
-            # Specify number of nodes to requeset
+            # TODO: Specify number of nodes
             if len(self.workers) > 0:
                 if events.get(self.push_socket) == zmq.POLLOUT:
                     self.start_new_task()
@@ -156,6 +156,7 @@ class Server(object):
             self.push_socket.send(srl.dumps(data))
 
     def send_command(self, command, payload=None):
+
         if payload:
             self.send_datum(command, *payload)
         else:
@@ -164,11 +165,15 @@ class Server(object):
     def start_new_task(self):
         action = self.next_task()
         if action:
-            command, data = action
-            self.send_command(command, data)
+            command, payload = action
+            self.send_command(command, payload)
 
     def next_task(self):
+        """
+        The main work cycle, does all the distribution.
+        """
 
+        # -------------------------------------------
         if self.state == START:
             self.map_iter = self.datafn()
 
@@ -182,6 +187,7 @@ class Server(object):
             self.state = MAP
             self.logging.info('Mapping')
 
+        # -------------------------------------------
         if self.state == MAP:
             try:
                 map_key, map_item = next(self.map_iter)
@@ -191,6 +197,7 @@ class Server(object):
                 self.logging.info('Shuffling')
                 self.state = SHUFFLE
 
+        # -------------------------------------------
         if self.state == SHUFFLE:
             self.reduce_iter = self.map_results.iteritems()
             self.working_reduces = set()
@@ -200,11 +207,17 @@ class Server(object):
                 self.logging.info('Reducing')
                 self.state = PARTITION
             else:
-                self.logging.debug('Still shuffling %s ' % len(self.working_maps))
+                self.logging.debug('Remaining %s ' % len(self.working_maps))
+                #self.logging.debug('Pending chunks %r' % self.working_maps.keys())
 
+        # -------------------------------------------
         if self.state == PARTITION:
+            # Normally we would define some sort way to balance the work
+            # across workers ( key modulo n ) but ZMQ PUSH/PULL load
+            # balances for us.
             self.state = REDUCE
 
+        # -------------------------------------------
         if self.state == REDUCE:
             try:
                 reduce_key, reduce_value = next(self.reduce_iter)
@@ -213,6 +226,7 @@ class Server(object):
             except StopIteration:
                 self.logging.info('Collecting')
                 self.state = COLLECT
+        # -------------------------------------------
 
         if self.state == COLLECT:
             if len(self.working_reduces) == 0:
@@ -258,7 +272,7 @@ class Server(object):
             self.working_reduces.remove(key)
 
         else:
-            raise RuntimeError()
+            raise RuntimeError("Unknown wire chatter")
 
     def on_map_done(self, command, data):
         self.map_done(data)
@@ -288,8 +302,10 @@ class Server(object):
             self.workers.add(worker_id)
 
             payload = ('bytecode', self.bytecode)
+            # The worker_id uniquely identifies the worker in
+            # the ZMQ topology.
             self.ctrl_socket.send_multipart([worker_id, srl.dumps(payload)])
-            self.logging.info('Sending Bytecode')
+            self.logging.info('Sending Bytecode to %s' % worker_id)
         else:
             self.logging.debug('Worker asking for code again?')
 
