@@ -14,6 +14,36 @@ not generally a good idea for performance. But this lets us a implement
 a simple shuffler using a Python defaultdict in just a few lines of code
 which is easy to understand.
 
+Theory
+======
+
+MapReduce can be thought of on a high level as being a list
+homomorphism that can be written as a composition of two functions (
+Reduce . Map ) . It is parallelizable because of the associativity of
+the of map and reduce operations.
+
+```haskell
+MapReduce :: [(k1, v1)] -> [(k3, v3)]
+MapReduce = Reduce .  Map
+
+MapReduce :: a -> [(k3, v3)]
+MapReduce = reducefn . shuffle . mapfn . datafn
+```
+
+The implementation provides two functions
+split ( datafn ) and shuffle.
+
+```haskell
+shuffle :: [ (k2, v2) ] -> [(k2, [v2])]
+```
+
+The user provides map and reduce.
+
+```haskell
+map :: (k1,v1) -> [ (k2, v2) ]
+reduce :: (k2, [v2]) -> [ (k3, v3) ]
+```
+
 Directions:
 ===========
 

@@ -94,7 +94,7 @@ class Server(object):
                 break
 
             # TODO: Specify number of nodes
-            if len(self.workers) > 5:
+            if len(self.workers) > 0:
                 if events.get(self.push_socket) == zmq.POLLOUT:
                     self.start_new_task()
                 if events.get(self.ctrl_socket) == zmq.POLLIN:
@@ -290,12 +290,6 @@ class Server(object):
 
         else:
             raise RuntimeError("Unknown wire chatter")
-
-    def on_map_done(self, command, data):
-        self.map_done(data)
-
-    def on_reduce_done(self, command, data):
-        self.reduce_done(data)
 
     def gen_bytecode(self):
         self.bytecode = (
