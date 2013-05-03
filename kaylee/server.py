@@ -107,6 +107,7 @@ class Server(object):
                 if events.get(self.ctrl_socket) == zmq.POLLIN:
                     self.manage()
 
+            #gevent.sleep(0)
 
     def connect(self, push_addr=None, pull_addr=None, control_addr=None):
         c = zmq.Context()
@@ -337,5 +338,5 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    srv = Server(backend=args['baackend'])
+    srv = Server(backend=args['backend'])
     srv.connect()

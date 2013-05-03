@@ -128,6 +128,8 @@ class Client(object):
                         self.kill()
                         break
 
+                gevent.sleep(0)
+
             else:
                 self.logging.info('Waiting for server')
 

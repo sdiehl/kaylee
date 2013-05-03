@@ -90,7 +90,7 @@ Run server:
     
 Run worker(s):
 
-    $ python kaylee/client.py
+    $ python -m kaylee.client
 
 Or
 
