@@ -1,7 +1,6 @@
 import sys
 import uuid
 import numpy
-import marshal
 import types
 import logging
 from itertools import imap
@@ -14,6 +13,12 @@ try:
     import msgpack as srl
 except ImportError:
     import cPickle as srl
+
+try:
+    #import dill as marshal
+    import marshal as marshal
+except ImportError:
+    import marshal
 
 # Server instructions
 # -------------------
@@ -164,21 +169,18 @@ class Client(object):
 
         self.have_bytecode = True
 
-    def set_llvm(self, mapbc, reducebc, mapsig=None, reducesig=None):
-        from numba.translate import Translate
+    def set_llvm(self, bitcode, mapsig=None, reducesig=None):
+        import llvm.core as lc
+        import llvm.ee as le
 
-        ret_type, arg_types = mapsig
+        lmodule = lc.Module.from_bitcode(bitcode)
+        eb = le.EngineBuilder.new(lmodule)
+        tc = le.TargetMachine.new(features='', cm=le.CM_JITDEFAULT)
 
-        mapt = Translate(mapbc, ret_type, arg_types)
-        mapt.translate()
+        engine = eb.create(tc)
 
-        ret_type, arg_types = reducesig
-
-        reducet = Translate(mapbc, ret_type, arg_types)
-        reducet.translate()
-
-        self.mapfn = mapt.get_ctypes_func(llvm=True)
-        self.reducefn = reducet.get_ctypes_func(llvm=True)
+        self.mapfn = engine.get_pointer_to_function('mapfn')
+        self.reducefn = engine.get_pointer_to_function('reducefn')
 
         self.have_bytecode = True
 
