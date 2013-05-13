@@ -3,9 +3,6 @@ import msgpack
 
 transports = frozenset(['udp', 'tcp', 'ipc', 'inproc'])
 
-def cat(*xs):
-    return "".join(xs)
-
 def print_timing(func):
   def wrapper(*arg):
     t1 = time.time()

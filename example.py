@@ -16,7 +16,7 @@ def datafn():
     i = count(0)
     total = mm.size()
     while mm.tell() < total:
-        yield next(i), memoryview(mm.readline())
+        yield next(i), mm.readline()
     mm.close()
 
 # map :: (k1,v1) -> [ (k2, v2) ]
@@ -43,6 +43,3 @@ stop = time.time()
 print stop-start
 #print s.results()
 print sorted(s.results().iteritems(), key=lambda x: x[1], reverse=True)[1:25]
-
-# Use a multiprocessing Pool example! Not the general use case
-# though!

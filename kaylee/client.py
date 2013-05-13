@@ -2,11 +2,12 @@ import sys
 import uuid
 import numpy
 import types
+import signal
 import logging
 from itertools import imap
+from collections import deque
 from utils import zmq_addr
 
-import gevent
 import zmq.green as zmq
 
 try:
@@ -15,8 +16,8 @@ except ImportError:
     import cPickle as srl
 
 try:
-    #import dill as marshal
     import marshal as marshal
+    #import dill as marshal
 except ImportError:
     import marshal
 
@@ -35,11 +36,16 @@ MAPATOM     = 'mapdone'
 MAPCHUNK    = 'mapkeydone'
 REDUCEATOM  = 'reducedone'
 
+# Heartbeat
+# ----------
+
+PING = 'ping'
+PONG = 'pong'
+
 class Client(object):
     """
     The MapReduce worker is a stateless worker, it receives a
-    value over ZMQ, calls the map/reduce function and yields it
-    back to the socket as quickly as possible.
+    value over ZMQ, calls the map/reduce function.
     """
 
     def __init__(self):
@@ -109,7 +115,6 @@ class Client(object):
                 try:
                     events = dict(poller.poll())
                 except zmq.ZMQError:
-                    # Die gracefully if the user sends a SIGQUIT
                     self._kill()
                     break
 
@@ -127,13 +132,11 @@ class Client(object):
                 if events.get(ctrl_socket) == zmq.POLLIN:
                     worker_id, command = self.ctrl_socket.recv_multipart()
                     if command == HEARTBEAT:
-                        self.ctrl_socket.send('alive')
+                        self.ctrl_socket.send(PONG)
                         print 'pong'
                     if command == DONE:
                         self.kill()
                         break
-
-                gevent.sleep(0)
 
             else:
                 self.logging.info('Waiting for server')
@@ -170,8 +173,8 @@ class Client(object):
         self.have_bytecode = True
 
     def set_llvm(self, bitcode, mapsig=None, reducesig=None):
-        import llvm.core as lc
         import llvm.ee as le
+        import llvm.core as lc
 
         lmodule = lc.Module.from_bitcode(bitcode)
         eb = le.EngineBuilder.new(lmodule)

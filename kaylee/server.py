@@ -1,13 +1,24 @@
+import signal
+import gevent
 import random
 import marshal
 import logging
-import gevent
 from StringIO import StringIO
 
 import zmq.green as zmq
 from collections import defaultdict
 from utils import zmq_addr
-from backends import RedisShuffler
+
+try:
+    import msgpack as srl
+except ImportError:
+    import cPickle as srl
+
+try:
+    import marshal as marshal
+    #import dill as marshal
+except ImportError:
+    import marshal
 
 # States
 # ------
@@ -20,9 +31,7 @@ COLLECT   = 5
 
 # Shufle Backends
 # ---------------
-MEMORY   = 0
-REDIS    = 1
-KAYLEEFS = 2
+MEMORY = 0
 
 # Server instructions
 # -------------------
@@ -38,10 +47,11 @@ MAPATOM     = 'mapdone'
 MAPCHUNK    = 'mapkeydone'
 REDUCEATOM  = 'reducedone'
 
-try:
-    import msgpack as srl
-except ImportError:
-    import cPickle as srl
+# Heartbeat
+# ---------
+
+PING = 'ping'
+PONG = 'pong'
 
 class Server(object):
 
@@ -67,10 +77,11 @@ class Server(object):
         self.logging = logging
 
     def heartbeat_loop(self):
-        for worker in self.workers:
-            self.ctrl_socket.send_multipart([worker, 'heartbeat'])
-        print 'ping'
-        gevent.sleep(1)
+        while True:
+            for worker in self.workers:
+                print 'ping'
+                self.ctrl_socket.send_multipart([worker, 'heartbeat'])
+            gevent.sleep(1)
 
     def main_loop(self):
         self.started = True
@@ -107,7 +118,7 @@ class Server(object):
                 if events.get(self.ctrl_socket) == zmq.POLLIN:
                     self.manage()
 
-            #gevent.sleep(0)
+            gevent.sleep(1)
 
     def connect(self, push_addr=None, pull_addr=None, control_addr=None):
         c = zmq.Context()
@@ -129,11 +140,14 @@ class Server(object):
         self.ctrl_socket.bind(ctrl_addr)
 
     def start(self, timeout=None):
+        gevent.signal(signal.SIGQUIT, gevent.shutdown)
+
         self.gen_bytecode()
         self.logging.info('Started Server')
 
         main      = gevent.spawn(self.main_loop)
         heartbeat = gevent.spawn(self.heartbeat_loop)
+
         gevent.joinall([
             main,
             heartbeat,
@@ -152,7 +166,6 @@ class Server(object):
         are alive.
         """
         msg = self.ctrl_socket.recv_multipart()
-        import pdb; pdb.set_trace()
 
     def _kill(self):
         gr = gevent.getcurrent()
@@ -197,9 +210,7 @@ class Server(object):
 
             if self.backend is MEMORY:
                 self.map_results = defaultdict(list)
-            elif self.backend is REDIS:
-                self.map_results = RedisShuffler()
-            elif self.backend is KAYLEEFS:
+            else:
                 raise NotImplementedError()
 
             self.state = MAP
@@ -257,18 +268,18 @@ class Server(object):
         # Don't use the results if they've already been counted
         command = self.pull_socket.recv(flags=zmq.SNDMORE)
 
-        if command == 'connect':
+        if command == CONNECT:
             worker_id = self.pull_socket.recv()
             self.send_code(worker_id)
 
         # Maps Units
         # ==========
 
-        elif command == 'mapkeydone':
+        elif command == MAPCHUNK:
             key = self.pull_socket.recv()
             del self.working_maps[key]
 
-        elif command == 'mapdone':
+        elif command == MAPATOM:
             key = self.pull_socket.recv(flags=zmq.SNDMORE)
             tkey = self.pull_socket.recv(flags=zmq.SNDMORE)
             value = self.pull_socket.recv()
@@ -278,7 +289,7 @@ class Server(object):
         # Reduce Units
         # ============
 
-        elif command == 'reducedone':
+        elif command == REDUCEATOM:
             key = self.pull_socket.recv(flags=zmq.SNDMORE)
             value = srl.loads(self.pull_socket.recv())
 
@@ -322,21 +333,21 @@ class Server(object):
             self.logging.debug('Worker asking for code again?')
 
 if __name__ == '__main__':
-    # TODO: Support Cython modules
     import sys
     import imp
     import argparse
 
-    path = sys.argv[1]
-    imp.load_module(path)
-
     parser = argparse.ArgumentParser()
 
+    parser.add_argument('path', help='Verbose logging')
     parser.add_argument('--verbose', help='Verbose logging')
     parser.add_argument('--config',  help='Configuration')
     parser.add_argument('--backend', help='Storage backend')
 
     args = parser.parse_args()
 
-    srv = Server(backend=args['backend'])
+    #fp, pathname, description = imp.find_module(args.path)
+    #mod = imp.load_module(args.path, fp, pathname, description)
+
+    srv = Server(backend=args.backend)
     srv.connect()
