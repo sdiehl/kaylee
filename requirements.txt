@@ -1,4 +1,4 @@
-gevent==0.13.8
+gevent==23.9.1
 gevent_zeromq==0.2.5
 pyzmq==2.2.0.1
 msgpack-python==0.3.1
